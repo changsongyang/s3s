@@ -143,7 +143,7 @@ impl PostPolicy {
         match condition {
             PostPolicyCondition::Eq { field, value } => {
                 let actual = Self::get_field_value(field, multipart);
-                if actual.as_deref() != Some(value.as_str()) {
+                if actual != Some(value.as_str()) {
                     return Err(S3Error::with_message(
                         S3ErrorCode::InvalidPolicyDocument,
                         format!(
@@ -155,7 +155,7 @@ impl PostPolicy {
             }
             PostPolicyCondition::StartsWith { field, prefix } => {
                 let actual = Self::get_field_value(field, multipart);
-                let actual_str = actual.as_deref().unwrap_or("");
+                let actual_str = actual.unwrap_or("");
                 if !actual_str.starts_with(prefix.as_str()) {
                     return Err(S3Error::with_message(
                         S3ErrorCode::InvalidPolicyDocument,
@@ -177,24 +177,8 @@ impl PostPolicy {
         Ok(())
     }
 
-    fn get_field_value(field: &str, multipart: &Multipart) -> Option<String> {
-        // Special handling for certain fields
-        match field {
-            "bucket" => {
-                // bucket is typically in the URL path, not in multipart fields
-                // For POST object, bucket comes from the endpoint URL
-                multipart.find_field_value("bucket").map(String::from)
-            }
-            "key" => multipart.find_field_value("key").map(String::from),
-            "content-type" => {
-                // Content-Type of the file
-                multipart.file.content_type.clone()
-            }
-            _ => {
-                // For other fields, look in multipart fields (already lowercase)
-                multipart.find_field_value(field).map(String::from)
-            }
-        }
+    fn get_field_value<'a>(field: &str, multipart: &'a Multipart) -> Option<&'a str> {
+        multipart.find_field_value(field)
     }
 
     /// Get the content-length-range condition if present
@@ -622,8 +606,32 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_condition_content_type() {
+    fn test_validate_condition_file_content_type() {
         let multipart = create_test_multipart(vec![], Some("image/jpeg"));
+        let condition = PostPolicyCondition::Eq {
+            field: "content-type".to_owned(),
+            value: "image/jpeg".to_owned(),
+        };
+
+        let result = PostPolicy::validate_condition(&condition, &multipart, 0);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_condition_field_content_type() {
+        let multipart = create_test_multipart(vec![("Content-Type", "image/jpg")], Some("image/jpeg"));
+        let condition = PostPolicyCondition::Eq {
+            field: "content-type".to_owned(),
+            value: "image/jpeg".to_owned(),
+        };
+
+        let result = PostPolicy::validate_condition(&condition, &multipart, 0);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_condition_field_content_type_right() {
+        let multipart = create_test_multipart(vec![("Content-Type", "image/jpeg")], Some("image/jpg"));
         let condition = PostPolicyCondition::Eq {
             field: "content-type".to_owned(),
             value: "image/jpeg".to_owned(),
